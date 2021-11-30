@@ -1,3 +1,5 @@
+// riscv.h
+
 // which hart (core) is this?
 static inline uint64
 r_mhartid()
@@ -348,6 +350,7 @@ sfence_vma()
 // MAXVA is actually one bit less than the max allowed by
 // Sv39, to avoid having to sign-extend virtual addresses
 // that have the high bit set.
+// 100 0000 0000 0000 0000 0000 0000 0000 0000 0000 
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
 
 typedef uint64 pte_t;

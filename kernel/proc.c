@@ -1,3 +1,5 @@
+// proc.c
+
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
@@ -20,6 +22,8 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern pagetable_t kernel_pagetable;
+extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 // initialize the proc table at boot time.
 void
@@ -41,7 +45,7 @@ procinit(void)
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
   }
-  kvminithart();
+   kvminithart();
 }
 
 // Must be called with interrupts disabled,
@@ -121,6 +125,20 @@ found:
     return 0;
   }
 
+  // 拷贝内核页表
+  p->kpagetable = proc_kpagetable(p);
+  if(p->kpagetable == 0){
+	  freeproc(p);
+	  release(&p->lock);
+	  return 0;
+  }
+
+  // 创建内核堆栈的映射
+  pte_t * pte_kstack = walk(kernel_pagetable, p->kstack, 0);
+  uint64 pa = PTE2PA(*pte_kstack);
+  if(mappages(p->kpagetable, p->kstack, PGSIZE, pa, PTE_R | PTE_W) != 0)
+  		panic("proc_cpykm");
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -141,7 +159,12 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+    
+  // free 进程的内核页表
+  if(p->kpagetable)
+    freeprockwalk(p->kpagetable);
   p->pagetable = 0;
+  p->kpagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -150,6 +173,44 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+}
+
+// 拷贝当前的内核页表
+pagetable_t proc_kpagetable(struct proc *p)
+{
+	pagetable_t kpagetable = (pagetable_t) kalloc();
+    memset(kpagetable, 0, PGSIZE);
+
+    // uart registers
+	if(mappages(kpagetable, UART0, PGSIZE, UART0, PTE_R | PTE_W) != 0)
+  		panic("proc_cpykm");
+
+    // virtio mmio disk interface
+	if(mappages(kpagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) != 0)
+  		panic("proc_cpykm");
+ 
+    // CLINT
+	if(mappages(kpagetable, CLINT, 0X10000, CLINT, PTE_R | PTE_W) != 0)
+  		panic("proc_cpykm");
+ 
+    // PLIC
+	if(mappages(kpagetable, PLIC, 0X400000, PLIC, PTE_R | PTE_W) != 0)
+  		panic("proc_cpykm");
+ 
+    // map kernel text executable and read-only.
+	if(mappages(kpagetable, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X) != 0)
+  		panic("proc_cpykm");
+
+    // map kernel data and the physical RAM we'll make use of.
+	if(mappages(kpagetable, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W) != 0)
+  		panic("proc_cpykm");
+ 
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+	if(mappages(kpagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) != 0)
+  		panic("proc_cpykm");
+
+	return kpagetable;
 }
 
 // Create a user page table for a given process,
@@ -473,8 +534,14 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        // 加载进程内核页表
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
+        kvminithart();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;

@@ -1,3 +1,5 @@
+// vm.c
+
 #include "param.h"
 #include "types.h"
 #include "memlayout.h"
@@ -289,6 +291,32 @@ freewalk(pagetable_t pagetable)
   kfree((void*)pagetable);
 }
 
+// 释放进程的内核页表
+void freeprockwalk(pagetable_t kpagetable)
+{
+  // 遍历第1级页表的页表项
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = kpagetable[i];
+    if(pte & PTE_V){
+      // 页表项指向第2级页表
+      pagetable_t kpagetable1 = (pagetable_t)PTE2PA(pte);
+
+      // 遍历第2级页表的页表项
+      for(int j = 0; j < 512; j++) {
+        pte_t pte1 = kpagetable1[j];
+        if(pte1 & PTE_V){
+          // 页表项指向第3级页表，释放第3级页表
+          kfree((void*)PTE2PA(pte1));
+          kpagetable1[j] = 0;
+        }
+      }
+      kfree((void*)kpagetable1);
+      kpagetable[i] = 0;
+    }
+  }
+  kfree((void*)kpagetable);
+}
+
 // Free user memory pages,
 // then free page-table pages.
 void
@@ -439,4 +467,30 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// lab3: vmprint
+void vmprint(pagetable_t pagetable)
+{
+	printf("page table %p\n", pagetable);
+	for(int i=0; i<512; i++){
+		pte_t *pte = &pagetable[i];
+		if(*pte & PTE_V){
+			pagetable_t pt1 = (pagetable_t)PTE2PA(*pte);
+			printf("..%d: pte %p pa %p\n", i, *pte, pt1);
+			for(int j=0; j<512; j++){
+				pte_t *pte1 = &pt1[j];
+				if(*pte1 & PTE_V){
+					pagetable_t pt0 = (pagetable_t)PTE2PA(*pte1);
+					printf(".. ..%d: pte %p pa %p\n", j, *pte1, pt0);
+					for(int k=0; k<512; k++){
+						pte_t *pte0 = &pt0[k];
+						if(*pte0 & PTE_V){
+							printf(".. .. ..%d: pte %p pa %p\n", k, *pte0, PTE2PA(*pte0));
+						}
+					}
+				}
+			}
+		}
+	}
 }
