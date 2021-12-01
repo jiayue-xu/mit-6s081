@@ -1,0 +1,3 @@
+为什么在copyin_new中有srcva + len < srcva？
+1、因为在memmove函数中要求len>0
+2、srcva + len可能会溢出64位整

@@ -115,6 +115,10 @@ exec(char *path, char **argv)
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
+
+  // 拷贝用户页表到内核页表
+  if(addupage2kpage(p->pagetable, p->kpagetable, 0, p->sz)<0)
+    goto bad;
   
   if(p->pid==1) vmprint(p->pagetable);
 

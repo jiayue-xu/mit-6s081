@@ -256,6 +256,36 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+// 拷贝进程的用户页表至进程内核页表
+int addupage2kpage(pagetable_t upage, pagetable_t kpage, uint64 oldsz, uint64 newsz) 
+{
+  uint64 a;
+  if(!upage || !kpage) // 第一级页表不存在
+    return -1;
+
+  if(oldsz < newsz){ // 进程用户空间增大了
+    oldsz = PGROUNDUP(oldsz);
+    for(a = oldsz; a < newsz; a+=PGSIZE){ // a是页对齐的虚拟地址
+      pte_t *upte = walk(upage, a, 0);
+
+      if(upte && (*upte & PTE_V)){
+        pte_t *kpte = walk(kpage, a, 1);
+        *kpte = (*upte) & (~PTE_U); // 为内核页表添加映射关系
+      } else{
+        return -1;
+      }
+    }
+  } else { // 进程用户空间减小了
+    oldsz = PGROUNDDOWN(oldsz);
+    for(a = oldsz; a > newsz; a-=PGSIZE){ // a是页对齐的虚拟地址
+      pte_t *kpte = walk(kpage, a, 0);
+      if(kpte)
+        *kpte = 0;
+    }
+  }
+  return 0;
+}
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -286,6 +316,9 @@ userinit(void)
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
 
+  // 拷贝用户页表到内核页表
+  addupage2kpage(p->pagetable, p->kpagetable, 0, p->sz);
+
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
@@ -299,10 +332,14 @@ userinit(void)
 int
 growproc(int n)
 {
-  uint sz;
+  uint oldsz, sz;
   struct proc *p = myproc();
 
-  sz = p->sz;
+  oldsz = sz = p->sz;
+
+  if(sz + n >= PLIC) // 限制用户内存的大小
+    return -1;
+
   if(n > 0){
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
@@ -311,6 +348,9 @@ growproc(int n)
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+
+  // 拷贝用户页表到内核页表
+  addupage2kpage(p->pagetable, p->kpagetable, oldsz, p->sz);
   return 0;
 }
 
@@ -337,6 +377,9 @@ fork(void)
   np->sz = p->sz;
 
   np->parent = p;
+
+  // 拷贝用户页表到内核页表
+  addupage2kpage(np->pagetable, np->kpagetable, 0, np->sz);
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
